@@ -1,27 +1,15 @@
-"""
-compute_hotspots.py
+"""Compute hotspot pixel coordinates from celestial coordinates.
+
+Given a set of astronomical image definitions (positions, sizes in
+square degrees and pixel dimensions), this script computes where each
+sub-image overlaps with the main mosaic image and writes the resulting
+pixel positions to a regions YAML file that the web viewer consumes.
 
 Usage:
     python compute_hotspots.py definitions.yaml regions.yaml
 
-Reads definitions.yaml with structure:
-
-main:
-  name: "main"
-  dzi: "main/euclid.dzi"
-  ra: "06:10:05.23"
-  dec: "-33:31:12.91"
-  area: 132      # in square degrees
-others:
-  - name: "imageA"
-    dzi: "imageA/imageA.dzi"
-    ra: "06:12:00.00"
-    dec: "-33:30:00.00"
-    area: 20
-
-Generates regions.yaml where each entry lists overlapping images:
-  x_px, y_px, radius_px: Python floats relative to main image
-  ra, dec: celestial coords
+See definitions.yaml for the input schema and regions.yaml for the
+output schema.
 """
 
 import math
@@ -33,8 +21,20 @@ import yaml
 from astropy.coordinates import SkyCoord
 
 
-def parse_dzi_size(dzi_path):
-    """Parse a .dzi file and return (width_px, height_px)."""
+def parse_dzi_size(dzi_path: str) -> tuple[int, int]:
+    """Parse a Deep Zoom Image (.dzi) XML file for its pixel dimensions.
+
+    Args:
+        dzi_path: Path to the .dzi XML descriptor.
+
+    Returns:
+        Tuple of ``(width_px, height_px)`` as integers.
+
+    Raises:
+        FileNotFoundError: If the .dzi file does not exist.
+        ET.ParseError: If the XML is malformed.
+        AttributeError: If the <Size> element is missing.
+    """
     tree = ET.parse(dzi_path)
     root = tree.getroot()
     ns = {"dz": "http://schemas.microsoft.com/deepzoom/2008"}
@@ -42,79 +42,125 @@ def parse_dzi_size(dzi_path):
     return int(size.get("Width")), int(size.get("Height"))
 
 
-def compute_angular_extents(area_sqdeg, pixel_w, pixel_h):
+def compute_angular_extents(
+    area_sqdeg: float, pixel_w: int, pixel_h: int
+) -> tuple[float, float]:
+    """Compute angular width and height from area and pixel aspect ratio.
+
+    Assumes the image covers a rectangular patch of the sky whose
+    angular area (in square degrees) is known and whose aspect ratio
+    matches the pixel dimensions.
+
+    Args:
+        area_sqdeg: Area covered by the image in square degrees.
+        pixel_w: Image width in pixels.
+        pixel_h: Image height in pixels.
+
+    Returns:
+        Tuple of ``(width_deg, height_deg)``.
     """
-    Given a rectangle of pixel size (pixel_w x pixel_h) that must cover
-    area_sqdeg square degrees, compute the angular width & height in degrees.
-    """
-    # area = W_deg * H_deg, with W_deg/H_deg = pixel_w/pixel_h
+    # area = W_deg * H_deg,  with W_deg / H_deg = pixel_w / pixel_h
     k = math.sqrt(area_sqdeg / (pixel_w * pixel_h))
     return k * pixel_w, k * pixel_h
+
+
+def _overlaps(
+    dra: float, ddec: float,
+    main_half_w: float, main_half_h: float,
+    other_half_w: float, other_half_h: float,
+) -> bool:
+    """Check if two axis-aligned rectangles overlap.
+
+    Args:
+        dra: Separation in RA (degrees, already scaled by cos(dec)).
+        ddec: Separation in Dec (degrees).
+        main_half_w: Half-width of the main image (degrees).
+        main_half_h: Half-height of the main image (degrees).
+        other_half_w: Half-width of the other image (degrees).
+        other_half_h: Half-height of the other image (degrees).
+
+    Returns:
+        True if the two rectangles overlap.
+    """
+    return (abs(dra) <= main_half_w + other_half_w and
+            abs(ddec) <= main_half_h + other_half_h)
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         print("Usage: python compute_hotspots.py definitions.yaml regions.yaml")
         sys.exit(1)
+
     defs_file, out_file = sys.argv[1], sys.argv[2]
 
-    # Load input definitions
-    defs = yaml.safe_load(open(defs_file))
+    # Load the definitions YAML
+    with open(defs_file) as f:
+        defs = yaml.safe_load(f)
+
     main_def = defs["main"]
     other_defs = defs.get("others", [])
 
-    # Main image pixel & angular sizes
+    # ------------------------------------------------------------------
+    # Main image: pixel size, angular size, centre coordinate
+    # ------------------------------------------------------------------
     main_w_px, main_h_px = parse_dzi_size(main_def["dzi"])
     main_area = float(main_def["area"])
     main_W_deg, main_H_deg = compute_angular_extents(main_area, main_w_px, main_h_px)
     deg_per_px_x = main_W_deg / main_w_px
     deg_per_px_y = main_H_deg / main_h_px
 
-    # Main image center in sky coords
-    main_coord = SkyCoord(main_def["ra"], main_def["dec"], unit=(u.hourangle, u.deg))
+    main_coord = SkyCoord(
+        main_def["ra"], main_def["dec"], unit=(u.hourangle, u.deg)
+    )
 
-    regions = {main_def["name"]: []}
+    # ------------------------------------------------------------------
+    # Build the output regions dict (only "main" entries for now)
+    # ------------------------------------------------------------------
+    regions: dict = {main_def["name"]: []}
 
     for other in other_defs:
-        # Other image center & size
-        ocoord = SkyCoord(other["ra"], other["dec"], unit=(u.hourangle, u.deg))
+        ocoord = SkyCoord(
+            other["ra"], other["dec"], unit=(u.hourangle, u.deg)
+        )
         ow_px, oh_px = parse_dzi_size(other["dzi"])
         oarea = float(other["area"])
         oW_deg, oH_deg = compute_angular_extents(oarea, ow_px, oh_px)
 
-        # Compute separations (in degrees; RA scaled by cos(dec))
+        # Separation from the main image centre
+        # RA separation is multiplied by cos(dec) to convert from
+        # angular to great-circle separation at the declination of the
+        # main image centre.
         dra = (ocoord.ra.degree - main_coord.ra.degree) * math.cos(
             math.radians(main_coord.dec.degree)
         )
         ddec = ocoord.dec.degree - main_coord.dec.degree
 
-        # Rectangular overlap test
-        if abs(dra) <= (main_W_deg / 2 + oW_deg / 2) and abs(ddec) <= (
-            main_H_deg / 2 + oH_deg / 2
-        ):
-            # Compute pixel center: x from left, y from top
+        if _overlaps(dra, ddec,
+                     main_W_deg / 2, main_H_deg / 2,
+                     oW_deg / 2, oH_deg / 2):
+            # Pixel coordinates: origin at top-left of the main image
             x_px = (dra + main_W_deg / 2) / deg_per_px_x
-            # Flip the sign so positive DEC shift moves up (towards smaller y)
-            y_px = (ddec + main_H_deg / 2) / deg_per_px_y
+            # Y is flipped so that positive Dec points upward (smaller y)
+            y_px = (main_H_deg / 2 - ddec) / deg_per_px_y
 
-            # Pixel radius: average of half-width & half-height
+            # Approximate radius: average of half-width and half-height
             r_px_x = (oW_deg / 2) / deg_per_px_x
             r_px_y = (oH_deg / 2) / deg_per_px_y
             radius_px = (r_px_x + r_px_y) / 2.0
 
-            regions[main_def["name"]].append(
-                {
-                    "name": other["name"],
-                    "target": other["name"],
-                    "ra": other["ra"],
-                    "dec": other["dec"],
-                    "x_px": float(x_px),
-                    "y_px": float(y_px),
-                    "radius_px": float(radius_px),
-                }
-            )
+            # Include celestial coordinates so the web viewer could
+            # display a coordinate readout in the future.
+            regions[main_def["name"]].append({
+                "name": other["name"],
+                "target": other["name"],
+                "ra": other["ra"],
+                "dec": other["dec"],
+                "x_px": float(x_px),
+                "y_px": float(y_px),
+                "radius_px": float(radius_px),
+            })
 
-    # Write out the regions YAML
+    # Write the output YAML
     with open(out_file, "w") as f:
         yaml.safe_dump(regions, f, sort_keys=False)
 

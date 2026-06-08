@@ -1,4 +1,27 @@
+# ============================================================================
+# Hotspot region definitions
+# ============================================================================
+# Each top-level key is an image identifier that corresponds to a DZI
+# tileset directory (e.g. "main", "ngc_2188").  The value is a list of
+# region definitions: clickable areas on that image that link to other
+# DZI tilesets.
+#
+# Fields
+# ------
+# name          : Human-readable label for the hotspot.
+# target        : Image key to switch to when clicked.
+# ra / dec      : Celestial coordinate of the region centre (for reference).
+# x_px / y_px   : Pixel coordinate relative to the *parent* image
+#                 (origin at top-left).
+# radius_px     : Approximate radius of the region in parent-image pixels.
+# default_zoom  : Zoom level to apply when the target image opens.
+# hotspot_size  : Diameter of the clickable UI element (CSS pixels).
+#
+# Hotspots can be generated automatically with compute_hotspots.py.
+# ============================================================================
+
 main:
+  # Hotspots on the wide-field main mosaic.
   - name: extragalactic_patch
     target: extragalactic_patch
     ra: "06:12:50.65"
@@ -8,6 +31,7 @@ main:
     radius_px: 2394.8037972395
     default_zoom: 1.5
     hotspot_size: 128
+
   - name: abell_3381
     target: abell_3381
     ra: "06:10:05.23"
@@ -15,8 +39,9 @@ main:
     x_px: 11400.0
     y_px: 3600.0
     radius_px: 201.20376374574747
-    deafult_zoom: 1.5
-    hotspot_size: 128
+    default_zoom: 1.5                     # NB: Typo "deafult_zoom" in original
+    hotspot_size: 128                     # is tolerated; default_zoom below is correct
+
   - name: ngc_2188
     target: ngc_2188
     ra: "06:10:01.48"
@@ -26,18 +51,21 @@ main:
     radius_px: 609.1746465505603
     default_zoom: 1.5
     hotspot_size: 128
+
   - name: Perseus
     target: perseus
     x_px: 6112
     y_px: 2099
     default_zoom: 1
     hotspot_size: 128
+
   - name: Euclid Deep Field South
     target: south_deep_field
     x_px: 18035
     y_px: 1107
     default_zoom: 1
     hotspot_size: 128
+
   - name: Einstein ring
     target: einstien_ring
     x_px: 7078
@@ -46,6 +74,8 @@ main:
     hotspot_size: 128
 
 ngc_2188:
+  # Hotspot on the NGC 2188 close-up, linking to the interacting-galaxies
+  # pair within that field.
   - name: interacting_galaxies
     target: interacting_galaxies
     ra: "06:10:01.48"
@@ -57,6 +87,8 @@ ngc_2188:
     hotspot_size: 32
 
 abell_3381:
+  # Hotspot on the Abell 3381 cluster image, linking to a distant spiral
+  # galaxy within the field.
   - name: distant_spiral
     target: distant_spiral
     ra: "06:10:05.23"
@@ -68,6 +100,8 @@ abell_3381:
     hotspot_size: 32
 
 south_deep_field:
+  # Hotspot on the Euclid Deep Field South image, linking to a 16×
+  # deeper zoom of the same field.
   - name: Euclid Deep Field South (16x)
     target: south_deep_field_16
     x_px: 6377
@@ -76,6 +110,7 @@ south_deep_field:
     hotspot_size: 256
 
 south_deep_field_16:
+  # Hotspot on the 16× deep field, linking to the 70× ultra-deep view.
   - name: Euclid Deep Field South (70x)
     target: south_deep_field_70
     x_px: 8072

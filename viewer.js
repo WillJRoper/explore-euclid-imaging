@@ -1,21 +1,94 @@
+/**
+ * @fileoverview Main application logic for the Euclid Image Explorer.
+ *
+ * Hooks into the OpenSeadragon viewer to:
+ *  - Render clickable hotspot overlays that link DZI tilesets.
+ *  - Manage a navigation stack (back button, history).
+ *  - Provide an idle-timer that auto-returns to a user-saved home view.
+ *
+ * @requires OpenSeadragon – loaded via <script> tag in index.html
+ * @requires ./regions.js   – ES module for loading hotspot definitions
+ */
+
 import Regions from "./regions.js";
 
-// ---- Configuration & State ----
+/* ------------------------------------------------------------------ */
+/*  Constants                                                         */
+/* ------------------------------------------------------------------ */
+
+/** @const {string} localStorage key under which the home view is persisted. */
 const STORAGE_KEY = "euclid_home_view";
+
+/** @const {string} Key used for the top-level mosaic image. */
 const MAIN_KEY = "main";
+
+/* ------------------------------------------------------------------ */
+/*  Module-level state                                                */
+/* ------------------------------------------------------------------ */
+
+/** @type {string} Currently displayed image key (e.g. "main", "ngc_2188"). */
 let currentKey = MAIN_KEY;
-let idleTimer;
-let viewer;
+
+/** @type {number|null} Handle returned by setTimeout for the idle-return timer. */
+let idleTimer = null;
+
+/** @type {OpenSeadragon.Viewer|null} The OSD viewer instance. */
+let viewer = null;
+
+/**
+ * Array of active OpenSeadragon.MouseTracker instances attached to
+ * hotspot overlay elements.  Kept so they can be torn down on image switch.
+ * @type {Array<OpenSeadragon.MouseTracker>}
+ */
 let hotspotTrackers = [];
-let regions;
+
+/**
+ * Parsed regions data from regions.yaml.
+ * @type {Regions|null}
+ */
+let regions = null;
+
+/**
+ * Stack of previously-visited image keys (most recent last).
+ * Used by the back-button to implement a simple navigation history.
+ * @type {Array<string>}
+ */
 let history = [];
+
+/**
+ * Stack of viewport bounds corresponding to each entry in `history`.
+ * @type {Array<OpenSeadragon.Rect>}
+ */
 let viewHistory = [];
+
+/**
+ * Default zoom level to apply when entering a new image.
+ * Overridden per-hotspot via `default_zoom` in regions.yaml.
+ * @type {number}
+ */
 let defaultZoom = 1.0;
+
+/**
+ * Flag set to true after the "open" handler fires, allowing the
+ * zoom-out auto-return mechanism to trigger once.
+ * Currently unused (the zoom handler is commented out).
+ * @type {boolean}
+ */
 let zoomReturnArmed = false;
 
-/** Initialize the OpenSeadragon viewer
+/* ------------------------------------------------------------------ */
+/*  Viewer initialisation                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Create and configure the OpenSeadragon viewer.
  *
- *  Note that this needs killing everytime we open a new image.
+ * A single persistent viewer is created.  Whenever a different DZI
+ * is opened via {@link viewer.open}, OSD reuses this instance while
+ * the "open" handler redraws hotspot overlays.
+ *
+ * Gesture settings are tuned for both desktop (scroll-to-zoom) and
+ * mobile (pinch-to-zoom, flick) interaction.
  */
 function initViewer() {
   viewer = OpenSeadragon({
@@ -24,19 +97,11 @@ function initViewer() {
       "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.0.0/images/",
     fullPage: true,
 
-    // Start with the main image:
     defaultZoomLevel: defaultZoom,
-
-    // Never allow zooming in past 4×:
     maxZoomPixelRatio: 4,
-
-    // (optional) prevent zooming all the way out too far:
     minZoomImageRatio: 0.45,
-
-    // Show the navigator panel
     showNavigator: false,
 
-    // Desktop gesture settings
     gestureSettingsMouse: {
       scrollToZoom: true,
       clickToZoom: false,
@@ -44,7 +109,6 @@ function initViewer() {
       pinchToZoom: true,
     },
 
-    // Mobile gesture settings
     gestureSettingsTouch: {
       scrollToZoom: false,
       pinchToZoom: true,
@@ -54,42 +118,54 @@ function initViewer() {
     },
   });
 
-  // Add the handlers
+  /*
+   * Every time a new DZI finishes loading, clear old overlays,
+   * render the new hotspots, and show/hide the back button.
+   */
   viewer.addHandler("open", () => {
     clearHotspots();
-    renderRegions(currentKey); // draw hotspots
-    toggleBackButton(); // show/hide back-arrow
+    renderRegions(currentKey);
+    toggleBackButton();
     document.querySelector("#viewer .openseadragon-canvas").style.opacity = 1;
     zoomReturnArmed = true;
   });
 
-  // // Watch zoom changes to catch when we should go back
+  /*
+   * (Commented out) Zoom-out-to-return mechanism.
+   * When uncommented, zooming out to the minimum zoom level on a
+   * sub-region would trigger an automatic return to the parent image.
+   * Left in place as a reference for future development.
+   */
   // viewer.addHandler("zoom", (evt) => {
-  //   // Get the viewport and zoom level
   //   const vp = viewer.viewport;
   //   const minZ = vp.getMinZoom();
   //   const curZ = evt.zoom;
-  //
-  //   // When user zooms out to (or below) that minimum, go back
   //   if (zoomReturnArmed && curZ <= minZ + 1e-6) {
   //     zoomReturnArmed = false;
-  //     // guard so we only trigger once per “reaching min”
   //     if (currentKey !== MAIN_KEY) {
   //       zoomReturnTo();
   //     }
   //   }
   // });
 
-  // Make sure the idle timer is reset on any interaction
+  /*
+   * Any user interaction (pointer down or scroll) resets the idle
+   * timer that triggers auto-return to the saved home view.
+   */
   const container = document.getElementById("viewer");
   container.addEventListener("pointerdown", startIdleTimer);
   container.addEventListener("wheel", startIdleTimer, { passive: true });
 }
 
-/** Clear all hotspots and trackers.
+/* ------------------------------------------------------------------ */
+/*  Hotspot management                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Remove all hotspot overlay elements and destroy their mouse trackers.
  *
- * This is called when switching images or when the viewer is destroyed.
- * It removes the hotspot overlays and stops tracking with mouse events
+ * Called before rendering new hotspots when switching images, so that
+ * stale overlays do not persist.
  */
 function clearHotspots() {
   viewer.clearOverlays();
@@ -100,45 +176,25 @@ function clearHotspots() {
   hotspotTrackers = [];
 }
 
-/** Load regions.yaml and kick things off. */
-async function loadRegions() {
-  try {
-    regions = await Regions.load("regions.yaml");
-    console.log("All regions:", regions);
-  } catch (err) {
-    console.error("Failed to load regions:", err);
-  }
-}
-
-/** Set the default zoom level for the viewer.
+/**
+ * Render clickable hotspot overlays for a given image key.
  *
- * This is a simple helper to update the default zoom level for each
- * new image opened in the viewer.
- */
-function setDefaultZoom(zoom) {
-  defaultZoom = zoom;
-}
-
-/** Draw hotspots for a given key.
+ * For each region definition found in `regions[key]`, a `<div>` element
+ * is created, positioned using the hotspot's pixel coordinates converted
+ * into viewport space, and registered with an OpenSeadragon overlay.
  *
- * This function is called whenever a new image is opened in the viewer
- * and it renders the hotspots defined in the regions.yaml file for that key.
+ * @param {string} key - Image key whose hotspots should be drawn.
  */
 function renderRegions(key) {
   const defs = regions[key] || [];
 
-  // Get the full image pixel width so we can turn px→viewport units
   const tiledImage = viewer.world.getItemAt(0);
-  const imgWidth = tiledImage ? tiledImage.getContentSize().x : 1; // fallback so we don’t divide by zero
+  const imgWidth = tiledImage ? tiledImage.getContentSize().x : 1;
 
   defs.forEach((def) => {
-    // 1) Find the region center in viewport coords
     const imgPt = new OpenSeadragon.Point(def.x_px, def.y_px);
     const vpCenter = viewer.viewport.imageToViewportCoordinates(imgPt);
 
-    console.log("Adding hotspot which should have size", def.hotspot_size);
-
-    // 2) Build a viewport‐space rect using our computed vpSize
     const vpRect = new OpenSeadragon.Rect(
       vpCenter.x,
       vpCenter.y,
@@ -146,14 +202,11 @@ function renderRegions(key) {
       def.hotspot_size / imgWidth,
     );
 
-    // 3) Create & style the hotspot
     const elt = document.createElement("div");
     elt.className = "region-hotspot";
 
-    // 4) Add it centered by OSD
     viewer.addOverlay(elt, vpRect, OpenSeadragon.Placement.CENTER);
 
-    // 5) Attach click handling
     const tracker = new OpenSeadragon.MouseTracker({
       element: elt,
       clickHandler: () => {
@@ -166,7 +219,23 @@ function renderRegions(key) {
   });
 }
 
-/** Show/hide the back-arrow based on currentKey. */
+/* ------------------------------------------------------------------ */
+/*  Navigation helpers                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Set the zoom level that will be applied the next time an image opens.
+ *
+ * @param {number} zoom - New default zoom level.
+ */
+function setDefaultZoom(zoom) {
+  defaultZoom = zoom;
+}
+
+/**
+ * Show or hide the back-arrow depending on whether we are on the
+ * main mosaic image or a sub-region.
+ */
 function toggleBackButton() {
   const btn = document.getElementById("backMain");
   if (currentKey === MAIN_KEY) {
@@ -176,67 +245,70 @@ function toggleBackButton() {
   }
 }
 
-/** Switch to a new key (image) in the viewer.
+/**
+ * Navigate to a different DZI image.
  *
- * This function handles the logic of switching images, it will destroy
- * the existing viewer to remove an listeners and overlays,
- * then re-initialize the viewer with the new image.
+ * The current position is saved into the navigation stack, the canvas
+ * fades out, the new image is opened, and the idle timer is restarted.
+ *
+ * @param {string} key - Target image key (directory / DZI file stem).
  */
 function switchTo(key) {
-  // Abort any pending “return to main”
   clearTimeout(idleTimer);
 
-  // Fade out
   const osdCanvas = document.querySelector("#viewer .openseadragon-canvas");
   osdCanvas.style.opacity = 0;
 
-  // Wait for the CSS fade (100ms)
+  /*
+   * Wait for the CSS opacity transition (100 ms) before swapping images
+   * so the user sees a smooth cross-fade.
+   */
   setTimeout(() => {
-    // Record where we were in the history
     history.push(currentKey);
     viewHistory.push(viewer.viewport.getBounds());
 
-    // Reset the state
     currentKey = key;
 
-    // Now open the new DZI
     const file = key === MAIN_KEY ? "euclid.dzi" : `${key}.dzi`;
     viewer.open(`${key}/${file}`);
 
-    // Restart the idle timer
     startIdleTimer();
   }, 100);
 }
 
-/** Start the idle timer to return to home after 30s of inactivity.
+/* ------------------------------------------------------------------ */
+/*  Idle-timer / auto-return to home                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Start (or restart) the 30-second idle countdown.
  *
- * This function is called whenever the user interacts with the viewer,
- * such as panning or zooming.
+ * If the user has saved a home view (stored in localStorage), the
+ * viewer will automatically return to that view after 30 s of
+ * inactivity.  Calling this function resets the countdown.
  */
 function startIdleTimer() {
   clearTimeout(idleTimer);
 
-  // Only start the timer if we have a location to return to
   if (!localStorage.getItem(STORAGE_KEY)) {
     return;
   }
 
-  // Set a new timer to return to home after 30 seconds of inactivity
   idleTimer = setTimeout(returnToHome, 30000);
 }
 
-/** Return to home location if it has been set.
+/**
+ * Return to the saved home view on the main mosaic image.
  *
- * This function is similar to the switchTo function, but instead of switching
- * to a new image, it will jump to the saved home view on the main image.
+ * Clears history and navigates back to `MAIN_KEY`.  Once the DZI
+ * finishes loading, the viewport is fitted to the saved bounds.
  */
 function returnToHome() {
   clearTimeout(idleTimer);
 
-  // Get the home view from localStorage
   const homeView = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
 
-  // Nothing to do if we are already at home
+  /* Bail early if we are already at the saved location. */
   const currentBounds = viewer.viewport.getBounds();
   if (
     homeView &&
@@ -248,23 +320,18 @@ function returnToHome() {
     return;
   }
 
-  // Fade out
   const osdCanvas = document.querySelector("#viewer .openseadragon-canvas");
   osdCanvas.style.opacity = 0;
 
-  // Wait for the CSS fade (100ms)
   setTimeout(() => {
     currentKey = MAIN_KEY;
 
     const url = `${MAIN_KEY}/euclid.dzi`;
     viewer.open(url);
 
-    // Clear out the history since we are returning to the main image
     history = [];
 
-    // Only once, when that image is ready:
     viewer.addOnceHandler("open", () => {
-      // Now that DZI is loaded, we can fit to the saved bounds
       if (homeView) {
         viewer.viewport.fitBounds(
           new OpenSeadragon.Rect(
@@ -273,33 +340,32 @@ function returnToHome() {
             homeView.width,
             homeView.height,
           ),
-          true, // animate
+          true,
         );
       }
     });
 
-    // Restart the idle timer
     startIdleTimer();
   }, 100);
 }
 
-/** Switch to the last key in the history or the main image.
+/* ------------------------------------------------------------------ */
+/*  History-based back navigation                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Go back one step in navigation history.
  *
- * This function handles the logic of switching images, it will destroy
- * the existing viewer to remove an listeners and overlays,
- * then re-initialize the viewer with the new image.
+ * Pops the last image key and viewport bounds and opens that image,
+ * restoring the saved viewport position.
  */
 function returnTo() {
-  // Abort any pending “return to main”
   clearTimeout(idleTimer);
 
-  // Fade out
   const osdCanvas = document.querySelector("#viewer .openseadragon-canvas");
   osdCanvas.style.opacity = 0;
 
-  // Wait for the CSS fade (100ms)
   setTimeout(() => {
-    // Reset the state
     let lastView;
     if (history.length > 0) {
       currentKey = history.pop();
@@ -309,11 +375,9 @@ function returnTo() {
       lastView = null;
     }
 
-    // Now open the new DZI
     const file = currentKey === MAIN_KEY ? "euclid.dzi" : `${currentKey}.dzi`;
     viewer.open(`${currentKey}/${file}`);
 
-    // Update the viewport to the last view if available
     if (lastView) {
       viewer.addOnceHandler("open", () => {
         viewer.viewport.fitBounds(
@@ -323,21 +387,24 @@ function returnTo() {
             lastView.width,
             lastView.height,
           ),
-          true, // animate
+          true,
         );
       });
     }
 
-    // Restart the idle timer
     startIdleTimer();
   }, 100);
 }
 
-/** Switch to the last key in the history via zooming out.
+/**
+ * (Unused) Zoom-out auto-return.
  *
- * This function handles the logic of switching images, it will destroy
- * the existing viewer to remove an listeners and overlays,
- * then re-initialize the viewer with the new image.
+ * Intended to be triggered when the user zooms out to the minimum
+ * zoom level on a sub-region.  Instead of using the back-arrow,
+ * zooming all the way out automatically returns to the parent image
+ * and animates the viewport to focus on the hotspot that was clicked.
+ *
+ * Currently unreferenced — kept as a pattern reference.
  */
 function zoomReturnTo() {
   clearTimeout(idleTimer);
@@ -345,7 +412,6 @@ function zoomReturnTo() {
   const osdCanvas = document.querySelector("#viewer .openseadragon-canvas");
   osdCanvas.style.opacity = 0;
 
-  // 1) Pop history now, and capture leavingKey here
   let lastView = null;
   let leavingKey = currentKey;
   if (history.length) {
@@ -355,32 +421,28 @@ function zoomReturnTo() {
     currentKey = MAIN_KEY;
   }
 
-  // 2) Open the new DZI
-  const url = `${currentKey}/${currentKey === MAIN_KEY ? "euclid.dzi" : currentKey + ".dzi"}`;
+  const url = `${currentKey}/${
+    currentKey === MAIN_KEY ? "euclid.dzi" : currentKey + ".dzi"
+  }`;
   viewer.open(url);
 
-  // 3) Wait for the new image to load before doing any viewport work
   viewer.addOnceHandler(
     "open",
     () => {
-      // fade the canvas back in
       osdCanvas.style.opacity = 1;
 
-      // find the region that pointed to our previous key
       const leavingRegion = regions[currentKey]?.find(
         (r) => r.target === leavingKey,
       );
 
       if (leavingRegion) {
-        // compute its viewport-point
         const imgPt = new OpenSeadragon.Point(
           leavingRegion.x_px,
           leavingRegion.y_px,
         );
         const focusPt = viewer.viewport.imageToViewportCoordinates(imgPt);
-        viewer.viewport.zoomTo(1e4, focusPt, true); // huge number to guarantee max
+        viewer.viewport.zoomTo(1e4, focusPt, true);
       } else if (lastView) {
-        // otherwise restore the saved bounds
         viewer.viewport.fitBounds(lastView, true);
       }
 
@@ -390,7 +452,17 @@ function zoomReturnTo() {
   );
 }
 
-/** Save current viewport as “home”. */
+/* ------------------------------------------------------------------ */
+/*  Home-view persistence                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Save the current viewport position and zoom as the "home view".
+ *
+ * The bounds are serialised to JSON and stored in localStorage under
+ * `STORAGE_KEY`.  The button is then hidden so the user cannot re-save
+ * accidentally.
+ */
 function saveHomeView() {
   const b = viewer.viewport.getBounds();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(b));
@@ -398,7 +470,16 @@ function saveHomeView() {
   startIdleTimer();
 }
 
-/** Initialize control buttons. */
+/* ------------------------------------------------------------------ */
+/*  Controls initialisation                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Wire up the "Set Home View" button and the back-arrow button.
+ *
+ * Must be called after the DOM is ready (i.e. inside `init` or a
+ * DOMContentLoaded callback).
+ */
 function initControls() {
   document.getElementById("saveHome").addEventListener("click", saveHomeView);
   document
@@ -406,7 +487,17 @@ function initControls() {
     .addEventListener("click", () => returnTo());
 }
 
-/** Kick everything off */
+/* ------------------------------------------------------------------ */
+/*  Bootstrap                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Load hotspot definitions, initialise the viewer and controls, and
+ * open the main mosaic image.
+ *
+ * The saved home view is deliberately cleared on every page load so
+ * that first-time visitors see the full mosaic.
+ */
 async function init() {
   localStorage.removeItem(STORAGE_KEY);
   initViewer();
@@ -415,5 +506,17 @@ async function init() {
   viewer.open(`${MAIN_KEY}/euclid.dzi`);
 }
 
-// Wait for the HTML to be parsed before we look up any elements
+/**
+ * Fetch and parse the regions YAML file, storing the result in the
+ * module-level `regions` variable.
+ */
+async function loadRegions() {
+  try {
+    regions = await Regions.load("regions.yaml");
+  } catch (err) {
+    console.error("Failed to load regions:", err);
+  }
+}
+
+/* Wait for the HTML to be fully parsed before querying elements. */
 document.addEventListener("DOMContentLoaded", init);

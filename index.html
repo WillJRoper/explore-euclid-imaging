@@ -1,4 +1,28 @@
 <!doctype html>
+<!--
+  ============================================================================
+  Euclid Image Explorer
+  ============================================================================
+  Interactive deep-zoom viewer for ESA Euclid survey imagery, built on
+  OpenSeadragon.  The main view is a wide-field mosaic of the Euclid
+  Deep Field; clickable hotspots let users drill into sub-regions at
+  progressively higher resolution.
+
+  Architecture
+  ------------
+  viewer.js   – Application logic (viewer init, hotspot rendering,
+                image switching, idle-timer auto-return)
+  regions.js  – YAML-based region/hotspot data loader
+  regions.yaml – Hotspot definitions (pixel coords, target images, zoom)
+  definitions.yaml – Image metadata (RA/Dec, area) for the hotspot
+                     computation script
+
+  Dependencies (loaded from CDN)
+  - OpenSeadragon v4.0.0  – Deep-zoom tile renderer
+  - js-yaml v4.1.0        – YAML parser (loaded by regions.js)
+  - Hack Nerd Font        – Monospace UI font
+  ============================================================================
+-->
 <html lang="en">
 
 <head>
@@ -6,13 +30,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Euclid Image Explorer</title>
 
-  <!-- OpenSeadragon & js-yaml -->
+  <!-- OpenSeadragon: deep-zoom tile viewer -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.0.0/openseadragon.min.js"
     crossorigin="anonymous"></script>
 
+  <!-- Hack Nerd Font for UI elements -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/nerd-fonts/2.1.0/css/hack.css" />
 
   <style>
+    /* ---- Reset & full-screen canvas ---- */
+
     html,
     body {
       height: 100%;
@@ -34,11 +61,12 @@
       opacity: 1;
     }
 
+    /* Smooth crossfade when switching between DZI images */
     .openseadragon-canvas {
       transition: opacity 0.1s ease;
     }
 
-    /* Using OSD’s .fullpage class */
+    /* Hide the default full-page toggle that OSD injects */
     .openseadragon-container.fullpage .openseadragon-fullpage-control {
       display: none !important;
     }
@@ -49,29 +77,32 @@
       display: none !important;
     }
 
+    /* ---- Clickable hotspot markers ---- */
+
     .region-hotspot {
       position: absolute;
       pointer-events: auto;
       cursor: pointer;
       z-index: 10000;
 
-      /* logo-only background */
+      /* Click-me icon (circular arrow badge) */
       background: url("clickMe-512px.png") no-repeat center center;
       background-size: contain;
 
-      /* hint to GPU for smoother transforms */
+      /* Hint to GPU for smoother transforms during pan/zoom */
       will-change: transform;
 
-      /* animate scale + glow on hover */
-      transition:
-        transform 0.2s ease,
-        box-shadow 0.2s ease;
+      /* Animate scale + glow on hover */
+      transition: transform 0.2s ease,
+                  box-shadow 0.2s ease;
     }
 
     .region-hotspot:hover {
       transform: scale(1.1);
       box-shadow: 0 0 14px rgba(255, 255, 255, 0.6);
     }
+
+    /* ---- Top-centre controls ---- */
 
     #controls {
       position: absolute;
@@ -90,40 +121,37 @@
       display: none;
     }
 
-    /* Let the button flow inside it */
+    /* "Set Home View" button – glassmorphism style */
     #saveHome {
       position: relative;
-      /* or just omit position entirely */
       margin: 0;
-      /* reset any margins if needed */
       padding: 0.6em 1.2em;
       font-size: 0.9rem;
       background: rgba(255, 255, 255, 0.15);
       backdrop-filter: blur(6px);
       border: 1px solid rgba(255, 255, 255, 0.6);
-      box-shadow:
-        inset 0 0 6px rgba(255, 255, 255, 0.5),
-        0 0 8px rgba(255, 255, 255, 0.2);
+      box-shadow: inset 0 0 6px rgba(255, 255, 255, 0.5),
+                  0 0 8px rgba(255, 255, 255, 0.2);
       border-radius: 24px;
       color: white;
       cursor: pointer;
-      transition:
-        background 0.2s ease,
-        box-shadow 0.2s ease,
-        transform 0.2s ease;
+      transition: background 0.2s ease,
+                  box-shadow 0.2s ease,
+                  transform 0.2s ease;
     }
 
     #saveHome:hover {
       background: rgba(255, 255, 255, 0.25);
-      box-shadow:
-        inset 0 0 8px rgba(255, 255, 255, 0.7),
-        0 0 12px rgba(255, 255, 255, 0.3);
+      box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.7),
+                  0 0 12px rgba(255, 255, 255, 0.3);
       transform: scale(1.05);
     }
 
     #saveHome.hidden {
       display: none;
     }
+
+    /* ---- Bottom-left back button ---- */
 
     #backMain {
       position: absolute;
@@ -132,20 +160,15 @@
       width: 52px;
       height: 52px;
       padding: 8px;
-      /* room around the arrow */
-
       background: rgba(0, 0, 0, 0.6);
       border: none;
       border-radius: 50%;
       cursor: pointer;
-
       display: flex;
       align-items: center;
       justify-content: center;
-
-      transition:
-        background 0.2s ease,
-        transform 0.2s ease;
+      transition: background 0.2s ease,
+                  transform 0.2s ease;
       z-index: 2000;
     }
 
@@ -158,27 +181,25 @@
       display: none;
     }
 
-    /* SVG sizing */
     .back-arrow {
       width: 28px;
       height: 28px;
     }
 
-    /* Logos at bottom-right corner */
+    /* ---- Bottom-right institutional logo bar ---- */
+
     #logoBar {
       position: absolute;
       bottom: 1rem;
       right: 1rem;
       display: flex;
       gap: 0.5rem;
-      /* space between logos */
       align-items: center;
       z-index: 2000;
     }
 
     #logoBar .logo {
       height: 10vh;
-      /* adjust to whatever height you like */
       width: auto;
       object-fit: contain;
     }
@@ -187,15 +208,20 @@
 
 <body>
   <div id="viewer" style="position: relative">
+
+    <!--
+      Back-arrow button – visible only when viewing a sub-region.
+      Clicking returns to the previous image in the navigation history.
+    -->
     <button id="backMain" class="hidden" title="Back to main view">
       <svg class="back-arrow" viewBox="0 0 24 24" aria-hidden="true">
         <defs>
-          <!-- Glassy gradient for the arrow -->
+          <!-- Glassy gradient for the arrow stroke -->
           <linearGradient id="arrowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stop-color="rgba(255,255,255,0.8)" />
             <stop offset="100%" stop-color="rgba(255,255,255,0.4)" />
           </linearGradient>
-          <!-- Soft glow filter -->
+          <!-- Soft outer glow -->
           <filter id="arrowGlow" x="-50%" y="-50%" width="200%" height="200%">
             <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur" />
             <feMerge>
@@ -204,22 +230,27 @@
             </feMerge>
           </filter>
         </defs>
-        <!-- Left-pointing arrow path -->
+        <!-- Left-pointing chevron -->
         <path d="M15 6l-6 6 6 6" fill="none" stroke="url(#arrowGrad)" stroke-width="2.5" stroke-linecap="round"
           stroke-linejoin="round" filter="url(#arrowGlow)" />
       </svg>
     </button>
+
+    <!-- Top-centre: "Set Home View" button (hidden after first use) -->
     <div id="controls">
       <button id="saveHome">Set Home View</button>
     </div>
+
+    <!-- ES module entry point – deferred until DOM is ready -->
     <script type="module" src="viewer.js" defer></script>
 
-    <!-- Logo bar in bottom-right -->
+    <!-- Institutional logos – bottom-right corner -->
     <div id="logoBar">
       <img src="logos/EC_logos_official_white_with_text.png" alt="ESA/Euclid" class="logo" />
       <img src="logos/Royal_Society_logo.png" alt="Royal Society" class="logo" />
       <img src="logos/sussex-logo.png" alt="University of Sussex" class="logo" />
     </div>
+
   </div>
 </body>
 

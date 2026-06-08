@@ -1,46 +1,76 @@
+# ============================================================================
+# Image definitions for compute_hotspots.py
+# ============================================================================
+# This file defines:
+#   1) The main (parent) mosaic image: its DZI path, centre RA/Dec, sky
+#      coverage, and orientation.
+#   2) Sub-region images: each has a DZI path, centre RA/Dec, and sky area.
+#
+# The compute_hotspots.py script reads this file and produces regions.yaml,
+# which the web viewer uses to position clickable hotspots on the main
+# mosaic.
+#
+# Units
+# -----
+# ra, dec   : HH:MM:SS.SS / DD:MM:SS.SS  (ICRS)
+# area      : square degrees
+# fovx,fovy : approximate field of view in degrees
+# north     : position angle of north in degrees (E of N)
+# ============================================================================
+
 main:
-  name: "main"
-  dzi: "main/euclid.dzi"
-  ra: "06:08:54.5"
-  dec: "-39:47:44.8"
-  fovx: 31.9
-  fovy: 10.1
-  north: 285.6
+  # ------------------------------------------------------------------
+  # Main mosaic image – the wide-field view shown on first load.
+  # ------------------------------------------------------------------
+  name: "main"                        # Image key (directory name)
+  dzi: "main/euclid.dzi"              # Path to the Deep Zoom descriptor
+  ra: "06:08:54.5"                    # Centre RA (ICRS, hours)
+  dec: "-39:47:44.8"                  # Centre Dec (ICRS, degrees)
+  fovx: 31.9                          # Approximate field of view, RA axis
+  fovy: 10.1                          # Approximate field of view, Dec axis
+  north: 285.6                        # North position angle (degrees E of N)
 
 others:
+  # ------------------------------------------------------------------
+  # Sub-region images – deep-zoom tilesets linked from the main mosaic.
+  # Each entry needs a unique name (matches the subdirectory name), a
+  # DZI file path, the celestial centre coordinate, and the sky area in
+  # square degrees.
+  # ------------------------------------------------------------------
+
   - name: "distant_spiral"
     dzi: "distant_spiral/distant_spiral.dzi"
     ra: "06:10:05.23"
     dec: "-33:31:12.91"
-    area: 0.0004 # sky coverage in square degrees
+    area: 0.0004                       # ~1.3 × 1.1 arcmin
 
   - name: "extragalactic_patch"
     dzi: "extragalactic_patch/extragalactic_patch.dzi"
     ra: "06:12:50.65"
     dec: "-35:12:33.44"
-    area: 17 # sky coverage in square degrees
+    area: 17                            # ~5.9° × 2.9°
 
   - name: "interacting_galaxies"
     dzi: "interacting_galaxies/interacting_galaxies.dzi"
     ra: "06:10:01.48"
     dec: "-33:49:36.85"
-    area: 0.007
+    area: 0.007                         # ~5.2 × 4.8 arcmin
 
   - name: "abell_3381"
     dzi: "abell_3381/abell_3381.dzi"
     ra: "06:10:05.23"
     dec: "-33:31:12.91"
-    area: 0.12
+    area: 0.12                          # ~0.4° × 0.3°
 
   - name: "ngc_2188"
     dzi: "ngc_2188/ngc_2188.dzi"
     ra: "06:10:01.48"
     dec: "-33:49:36.85"
-    area: 1.1
+    area: 1.1                           # ~1.5° × 0.7°
 
-  # add more images as needed:
-  # - name: "imageB"
-  #   dzi: "imageB/imageB.dzi"
-  #   ra: "06:09:50.00"
-  #   dec: "-33:32:00.00"
-  #   area: 10
+  # Template for adding new sub-regions:
+  # - name: "image_name"
+  #   dzi: "image_name/image_name.dzi"
+  #   ra: "HH:MM:SS.SS"
+  #   dec: "±DD:MM:SS.SS"
+  #   area: 10                           # square degrees
