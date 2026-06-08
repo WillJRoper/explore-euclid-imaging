@@ -501,7 +501,9 @@ function initControls() {
 async function init() {
   localStorage.removeItem(STORAGE_KEY);
   initViewer();
-  initControls();
+  document
+    .getElementById("backMain")
+    .addEventListener("click", () => returnTo());
   await loadRegions();
   viewer.open(`${MAIN_KEY}/euclid.dzi`);
 }
