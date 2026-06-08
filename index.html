@@ -186,19 +186,27 @@
       height: 28px;
     }
 
-    /* ---- Bottom-right institutional logo bar ---- */
+    /* ---- Institutional logos ---- */
 
-    #logoBar {
+    #logoLeft {
       position: absolute;
       bottom: 1rem;
-      right: 1rem;
+      left: 1rem;
       display: flex;
-      gap: 0.5rem;
       align-items: center;
       z-index: 2000;
     }
 
-    #logoBar .logo {
+    #logoRight {
+      position: absolute;
+      bottom: 1rem;
+      right: 1rem;
+      display: flex;
+      align-items: center;
+      z-index: 2000;
+    }
+
+    .logo {
       height: 10vh;
       width: auto;
       object-fit: contain;
@@ -244,11 +252,16 @@
     <!-- ES module entry point – deferred until DOM is ready -->
     <script type="module" src="viewer.js" defer></script>
 
-    <!-- Institutional logos – bottom-right corner -->
-    <div id="logoBar">
-      <img src="logos/EC_logos_official_white_with_text.png" alt="ESA/Euclid" class="logo" />
-      <img src="logos/Royal_Society_logo.png" alt="Royal Society" class="logo" />
-      <img src="logos/sussex-logo.png" alt="University of Sussex" class="logo" />
+    <!-- Institutional logos -->
+    <div id="logoLeft">
+      <a href="https://www.euclid-ec.org/" target="_blank" rel="noopener noreferrer">
+        <img src="logos/EC_logos_official_white_with_text.png" alt="ESA/Euclid" class="logo" />
+      </a>
+    </div>
+    <div id="logoRight">
+      <a href="https://royalsociety.org/science-events-and-lectures/summer-science-exhibition/" target="_blank" rel="noopener noreferrer">
+        <img src="logos/Royal_Society_logo.png" alt="Royal Society" class="logo" />
+      </a>
     </div>
 
   </div>
